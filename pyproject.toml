@@ -15,7 +15,7 @@ dependencies = [
     "nomad-schema-plugin-run@git+https://github.com/nomad-coe/nomad-schema-plugin-run.git@develop",
     "simulationparsers@git+https://github.com/nomad-coe/simulation-parsers.git@develop",
     "lxml>=5.2",
-    "MDAnalysis",
+    "mdanalysis==2.7.0",
     "panedr>=0.2",
     "scipy>=1.7.1",
     "pydantic>=1.10.8,<2.0.0",
