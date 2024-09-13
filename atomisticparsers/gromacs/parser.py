@@ -21,6 +21,7 @@ import numpy as np
 import logging
 import re
 import datetime
+from typing import List, Dict
 
 import panedr
 
@@ -53,7 +54,9 @@ from .metainfo.gromacs import (
     x_gromacs_section_input_output_files,
 )
 from atomisticparsers.utils import MDAnalysisParser, MDParser
-from simulationworkflowschema.molecular_dynamics import get_bond_list_from_model_contributions
+from simulationworkflowschema.molecular_dynamics import (
+    get_bond_list_from_model_contributions,
+)
 
 re_float = r'[-+]?\d+\.*\d*(?:[Ee][-+]\d+)?'
 re_n = r'[\n\r]'
@@ -62,6 +65,8 @@ MOL = 6.022140857e23
 
 
 def to_float(string):
+    if string is None:
+        return None
     try:
         value = float(string)
     except ValueError:
@@ -72,6 +77,13 @@ def to_float(string):
 class GromacsLogParser(TextParser):
     def __init__(self):
         super().__init__(None)
+        self.re_section = re.compile(r'^\s*([\w\-]+):\s*$')
+        self.re_subsection = re.compile(r'^\s*([\w\-]+\s[\d]+):\s*$')
+        self.re_scalar = re.compile(r'\s*([\w\-]+)\s*[=:]\s*(.+)')
+        self.re_array = re.compile(r'\s*([\w\-]+)\[[\d ]+\]\s*=\s*\{*(.+)')
+        self.re_shorthand_array = re.compile(
+            r'\s*([\w\-]+)\[\d+,\.\.\.,\d+\]\s*=\s*\{(\d+),\.\.\.,(\d+)\}'
+        )
 
     def init_quantities(self):
         def str_to_header(val_in):
@@ -79,24 +91,75 @@ class GromacsLogParser(TextParser):
             return {v[0].strip(): v[1].strip() for v in val if len(v) == 2}
 
         def str_to_input_parameters(val_in):
-            re_array = re.compile(r'\s*([\w\-]+)\[[\d ]+\]\s*=\s*\{*(.+)')
-            re_scalar = re.compile(r'\s*([\w\-]+)\s*[=:]\s*(.+)')
             parameters = dict()
-            val = val_in.strip().splitlines()
-            for val_n in val:
-                val_scalar = re_scalar.match(val_n)
-                if val_scalar:
-                    parameters[val_scalar.group(1)] = val_scalar.group(2)
+            stack = [parameters]  # Stack to track the current context
+            indent_levels = []  # To track the indentation levels
+
+            for val_n in val_in.strip().splitlines():
+                val_n = val_n.rstrip()  # Remove trailing spaces
+                if not val_n:
                     continue
-                val_array = re_array.match(val_n)
+
+                current_indent = len(val_n) - len(
+                    val_n.lstrip()
+                )  # Calculate the indentation level
+
+                # Handle end of section based on indentation
+                while indent_levels and current_indent <= indent_levels[-1]:
+                    stack.pop()
+                    indent_levels.pop()
+
+                # Check for section
+                section_match = self.re_section.match(val_n)
+                if section_match:
+                    section_name = section_match.group(1)
+                    stack[-1][section_name] = {}
+                    stack.append(stack[-1][section_name])
+                    indent_levels.append(current_indent)
+                    continue
+
+                # Check for subsection
+                subsection_match = self.re_subsection.match(val_n)
+                if subsection_match:
+                    subsection_name = subsection_match.group(1)
+                    stack[-1][subsection_name] = {}
+                    stack.append(stack[-1][subsection_name])
+                    indent_levels.append(current_indent)
+                    continue
+
+                # Check for scalar
+                val_scalar = self.re_scalar.match(val_n)
+                if val_scalar:
+                    key = val_scalar.group(1)
+                    value = val_scalar.group(2)
+                    if value.lower() in ['true', 'false']:
+                        value = value.lower() == 'true'
+                    elif value.replace('.', '', 1).isdigit():
+                        value = float(value) if '.' in value else int(value)
+                    stack[-1][key] = value
+
+                    continue
+
+                # Check for shorthand array
+                val_shorthand_array = self.re_shorthand_array.match(val_n)
+                if val_shorthand_array:
+                    array_key = val_shorthand_array.group(1)
+                    start = int(val_shorthand_array.group(2))
+                    end = int(val_shorthand_array.group(3))
+                    stack[-1][array_key] = list(range(start, end + 1))
+                    continue
+
+                # Check for array
+                val_array = self.re_array.match(val_n)
                 if val_array:
-                    parameters.setdefault(val_array.group(1), [])
+                    array_key = val_array.group(1)
                     value = [
                         float(v) for v in val_array.group(2).rstrip('}').split(',')
                     ]
-                    parameters[val_array.group(1)].append(
-                        value[0] if len(value) == 1 else value
-                    )
+                    stack[-1].setdefault(array_key, [])
+                    stack[-1][array_key].append(value[0] if len(value) == 1 else value)
+                    continue
+
             return parameters
 
         def str_to_energies(val_in):
@@ -170,7 +233,7 @@ class GromacsLogParser(TextParser):
             ),
             Quantity(
                 'input_parameters',
-                r'Input Parameters:\s*([\s\S]+?)\n\n',
+                r'Input Parameters:\s*\n([\s\S]+?)\n\n',
                 str_operation=str_to_input_parameters,
             ),
             Quantity('maximum_force', r'Norm of force\s*([\s\S]+?)\n\n', flatten=False),
@@ -192,19 +255,19 @@ class GromacsLogParser(TextParser):
 class GromacsMdpParser(TextParser):
     def __init__(self):
         super().__init__(None)
+        self.re_array = re.compile(r'\s*([\w\-]+)\[[\d ]+\]\s*=\s*\{*(.+)')
+        self.re_scalar = re.compile(r'\s*([\w\-]+)\s*[=:]\s*(.+)')
 
     def init_quantities(self):
         def str_to_input_parameters(val_in):
-            re_array = re.compile(r'\s*([\w\-]+)\[[\d ]+\]\s*=\s*\{*(.+)')
-            re_scalar = re.compile(r'\s*([\w\-]+)\s*[=:]\s*(.+)')
             parameters = dict()
             val = [line.strip() for line in val_in.splitlines()]
             for val_n in val:
-                val_scalar = re_scalar.match(val_n)
+                val_scalar = self.re_scalar.match(val_n)
                 if val_scalar:
                     parameters[val_scalar.group(1)] = val_scalar.group(2)
                     continue
-                val_array = re_array.match(val_n)
+                val_array = self.re_array.match(val_n)
                 if val_array:
                     parameters.setdefault(val_array.group(1), [])
                     value = [
@@ -311,12 +374,12 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
     def __init__(self):
         super().__init__(None)
 
-    def get_interactions(self):
+    def get_interactions(self, gromacs_version: str = None):
         interactions = super().get_interactions()
 
         # add force field parameters
         try:
-            interactions.extend(self.get_force_field_parameters())
+            interactions.extend(self.get_force_field_parameters(gromacs_version))
         except Exception:
             self.logger.error('Error parsing force field parameters.')
 
@@ -324,17 +387,26 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
 
         return interactions
 
-    def get_force_field_parameters(self):
+    def get_force_field_parameters(self, gromacs_version: str = None) -> List[Dict]:
         # read force field parameters not saved by MDAnalysis
         # copied from MDAnalysis.topology.tpr.utils
-        # TODO maybe a better implementation exists
-        if MDAnalysis.__version__ != '2.0.0':
-            self.logger.warning('Incompatible version of MDAnalysis.')
+        # TODO Revamp interactions section to only extract meaningful info
+        if MDAnalysis.__version__.split('.')[0] != '2':
+            self.logger.warning(
+                'MDAnalysis >= 2.0.0 is required for reading force field from tpr. Interactions will not be stored'
+            )
+            return []
+        gromacs_version = gromacs_version.split('.')[0] if gromacs_version else None
+        if gromacs_version == '2024':
+            self.logger.warning(
+                'Reading force field from tpr not yet supported for Gromacs 2024. Interactions will not be stored'
+            )
+            return []
 
         with open(self.mainfile, 'rb') as f:
             data = tpr_utils.TPXUnpacker(f.read())
 
-        interactions = []
+        interactions: List[Dict] = []
 
         # read header
         header = tpr_utils.read_tpxheader(data)
@@ -583,7 +655,7 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
                 tpr_setting.F_VSITE3FD,
                 tpr_setting.F_VSITE3FAD,
             ]:
-                parameters.append(data.unpack_real())  # vsite.a
+                parameters.append(data.unpack_reafilel())  # vsite.a
 
             elif i in [
                 tpr_setting.F_VSITE3OUT,
@@ -744,7 +816,7 @@ class GromacsParser(MDParser):
 
         n_frames = self.traj_parser.get('n_frames')
 
-        # # TODO read also from ene
+        # TODO read also from ene
         edr_file = self.get_gromacs_file('edr')
         self.energy_parser.mainfile = edr_file
 
@@ -1059,7 +1131,8 @@ class GromacsParser(MDParser):
         if n_atoms == 0:
             self.logger.error('Error parsing interactions.')
 
-        interactions = self.traj_parser.get_interactions()
+        gromacs_version = self.archive.run[0].program.version
+        interactions = self.traj_parser.get_interactions(gromacs_version)
         self.parse_interactions(interactions, sec_model)
 
         input_parameters = self.input_parameters
@@ -1128,14 +1201,18 @@ class GromacsParser(MDParser):
         if 'sd' in integrator:
             thermostat_parameters['thermostat_type'] = 'langevin_goga'
         if thermostat_parameters['thermostat_type']:
-            reference_temperature = self.input_parameters.get('ref-t', None)
+            reference_temperature = self.input_parameters.get('grpopts', {}).get(
+                'ref-t', None
+            )
             if isinstance(reference_temperature, str):
                 reference_temperature = to_float(
                     reference_temperature.split()[0]
                 )  # ! simulated annealing protocols not supported
             reference_temperature *= ureg.kelvin if reference_temperature else None
             thermostat_parameters['reference_temperature'] = reference_temperature
-            coupling_constant = self.input_parameters.get('tau-t', None)
+            coupling_constant = self.input_parameters.get('grpopts', {}).get(
+                'tau-t', None
+            )
             if isinstance(coupling_constant, str):
                 coupling_constant = to_float(
                     coupling_constant.split()[0]
@@ -1166,7 +1243,9 @@ class GromacsParser(MDParser):
         )
         barostat_parameters['barostat_type'] = value
         if barostat_parameters['barostat_type']:
-            couplingtype = self.input_parameters.get('pcoupltype', None).lower()
+            couplingtype = self.input_parameters.get(
+                'pcoupltype', None
+            ).lower()  # TODO fix this problematic None.lower()
             couplingtype_map = {
                 'isotropic': 'isotropic',
                 'semiisotropic': 'semi_isotropic',
@@ -1197,16 +1276,21 @@ class GromacsParser(MDParser):
 
     def get_free_energy_calculation_parameters(self):
         free_energy_parameters = {}
-        free_energy = self.input_parameters.get('free-energy', '')
+
+        free_energy = self.input_parameters.get('qm-opts', {}).get('free-energy', '')
         free_energy = free_energy.lower() if free_energy else ''
-        expanded = self.input_parameters.get('expanded', '')
+        expanded = self.input_parameters.get('qm-opts', {}).get('expanded', '')
         expanded = expanded.lower() if expanded else ''
-        delta_lambda = int(self.input_parameters.get('delta-lamda', -1))
+        delta_lambda = int(
+            self.input_parameters.get('qm-opts', {}).get('delta-lamda', -1)
+        )
         if free_energy == 'yes' and expanded == 'yes':
             self.logger.warning(
                 'storage of expanded ensemble simulation data not supported, skipping storage of free energy calculation parameters'
             )
-        elif free_energy == 'yes' and delta_lambda == 'no':
+        elif (
+            free_energy == 'yes' and delta_lambda == 'no'
+        ):  # TODO double check delta_lambda == no, may have changed for 2024.1
             self.logger.warning(
                 'Only fixed state free energy calculation calculations are explicitly supported, skipping storage of free energy calculation parameters.'
             )
@@ -1221,25 +1305,38 @@ class GromacsParser(MDParser):
                 'mass': 'mass',
                 'temperature': 'temperature',
             }
+
+            # get lambdas from the log
+            lambdas = self.input_parameters.get('all-lambdas', {})
+            # ! unsure if the below placement of temperature-lambdas in the dict will always be exactly the same
+            # TODO fix temperature-lambdas from being overwritten due to lack of indenting
+            lambdas['temperature'] = self.input_parameters.get(
+                'temperature-lambdas', None
+            )
             lambdas = {
-                key: self.input_parameters.get(f'{key}-lambdas', '')
-                for key in lambda_key_map.keys()
+                key.split('-')[0]: [to_float(i) for i in val.split()]
+                for key, val in lambdas.items()
+                if val is not None
             }
-            lambdas = {
-                key: [to_float(i) for i in val.split()] for key, val in lambdas.items()
-            }
+
             free_energy_parameters['lambdas'] = [
                 {'type': nomad_key, 'value': lambdas[gromacs_key]}
                 for gromacs_key, nomad_key in lambda_key_map.items()
                 if lambdas[gromacs_key]
             ]
             free_energy_parameters['lambda_index'] = self.input_parameters.get(
-                'init-lambda-state', ''
-            )
+                'qm-opts', {}
+            ).get('init-lambda-state', None)
 
+            #! Some free energy info seems to be missing from log and is difficult to extract.
+            #! Using the mdp file directly.
             atoms_info = self.traj_parser._results['atoms_info']
             atoms_moltypes = np.array(atoms_info['moltypes'])
-            couple_moltype = self.input_parameters.get('couple-moltype', '').split()
+            couple_moltype = (
+                self.input_parameters.get('mdp_unique_params', {})
+                .get('couple-moltype', '')
+                .split()
+            )
             n_atoms = len(atoms_moltypes)
             indices = []
             if len(couple_moltype) == 1 and couple_moltype[0].lower() == 'system':
@@ -1262,8 +1359,16 @@ class GromacsParser(MDParser):
                 'q': True,
                 'none': False,
             }
-            couple_initial = self.input_parameters.get('couple-lambda0', 'none').lower()
-            couple_final = self.input_parameters.get('couple-lambda1', 'vdw-q').lower()
+            couple_initial = (
+                self.input_parameters.get('mdp_unique_params', {})
+                .get('couple-lambda0', 'none')
+                .lower()
+            )
+            couple_final = (
+                self.input_parameters.get('mdp_unique_params', {})
+                .get('couple-lambda1', 'vdw-q')
+                .lower()
+            )
 
             free_energy_parameters['initial_state_vdw'] = couple_vdw_map[couple_initial]
             free_energy_parameters['final_state_vdw'] = couple_vdw_map[couple_final]
@@ -1274,9 +1379,11 @@ class GromacsParser(MDParser):
                 couple_final
             ]
 
-            couple_intramolecular = self.input_parameters.get(
-                'couple-intramol', 'on'
-            ).lower()
+            couple_intramolecular = (
+                self.input_parameters.get('mdp_unique_params', {})
+                .get('couple-intramol', 'on')
+                .lower()
+            )
             free_energy_parameters['final_state_bonded'] = True
             free_energy_parameters['initial_state_bonded'] = (
                 couple_intramolecular != 'yes'
@@ -1445,16 +1552,58 @@ class GromacsParser(MDParser):
 
             self.parse_md_workflow(dict(method=method, results=results))
 
+            # TODO fix hdf5 datasets here and then implement testing
             if flag_fe and self.archive.m_context:
                 sec_fe_parameters = (
                     self.archive.workflow2.method.free_energy_calculation_parameters[0]
                 )
                 sec_fe = self.archive.workflow2.results.free_energy_calculations[0]
                 sec_fe.method_ref = sec_fe_parameters
-                sec_fe.value_total_energy_magnitude = columns[:, 0]
-                sec_fe.value_total_energy_derivative_magnitude = columns[:, 1]
-                sec_fe.value_total_energy_differences_magnitude = columns[:, 2:-1]
-                sec_fe.value_PV_energy_magnitude = columns[:, -1]
+                sec_fe.value_total_energy_magnitude = (
+                    columns[:, 0] * self._gro_energy_units
+                )
+                sec_fe.value_total_energy_derivative_magnitude = (
+                    columns[:, 1] * self._gro_energy_units
+                )
+                sec_fe.value_total_energy_differences_magnitude = (
+                    columns[:, 2:-1] * self._gro_energy_units
+                )
+                sec_fe.value_PV_energy_magnitude = (
+                    columns[:, -1] * self._gro_energy_units
+                )
+
+    def standardize_input_parameters(self, input_dict: dict):
+        """_summary_
+
+        Args:
+            input_dict (dict): _description_
+        """
+        for key, val in input_dict.items():
+            if isinstance(val, dict):
+                self.standardize_input_parameters(val)
+            elif isinstance(val, str):
+                input_dict[key.replace('_', '-')] = val.lower()
+            elif isinstance(val, float):
+                if abs(val) == np.inf:
+                    input_dict[key] = 'inf' if val > 0 else '-inf'
+
+    def check_input_parameters_dict_recursive(self, input_dict: dict, key: str):
+        """_summary_
+
+        Args:
+            input_dict (dict): _description_
+            key (str): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        if key in input_dict:
+            return True
+        for _, v in input_dict.items():
+            if isinstance(v, dict):
+                if self.check_input_parameters_dict_recursive(v, key):
+                    return True
+        return False
 
     def parse_input(self):
         sec_run = self.archive.run[-1]
@@ -1476,19 +1625,11 @@ class GromacsParser(MDParser):
         sec_control_parameters = x_gromacs_section_control_parameters()
         sec_run.x_gromacs_section_control_parameters = sec_control_parameters
         input_parameters = self.input_parameters
-        input_parameters.update(self.info.get('header', {}))
-        for key, val in input_parameters.items():
-            key = (
-                'x_gromacs_inout_control_%s'
-                % key.replace('-', '').replace(' ', '_').lower()
-            )
-            quantity_def = sec_control_parameters.m_def.all_quantities.get(key)
-            if quantity_def:
-                try:
-                    val = str(val) if not isinstance(val, np.ndarray) else val
-                    sec_control_parameters.m_set(quantity_def, val)
-                except Exception:
-                    self.logger.error('Error setting metainfo.', data={'key': key})
+        # input_parameters.update(self.info.get("header", {})) # ? Is there an example where this does something?
+        quantity_def = sec_control_parameters.m_def.all_quantities.get(
+            'x_gromacs_all_input_parameters'
+        )
+        sec_control_parameters.m_set(quantity_def, input_parameters)
 
     def write_to_archive(self):
         self._maindir = os.path.dirname(self.mainfile)
@@ -1528,16 +1669,25 @@ class GromacsParser(MDParser):
             sec_run.x_gromacs_parallel_task_nr = host_info[1]
             sec_run.x_gromacs_number_of_tasks = host_info[2]
 
-        # parse the input parameters using log file as default and mdp output or input as supplementary
-        self.input_parameters = {
-            key.replace('_', '-'): val.lower() if isinstance(val, str) else val
-            for key, val in self.log_parser.get('input_parameters', {}).items()
-        }
+        # parse the input parameters using log file's hierarchical structure as default
+        # self.input_parameters = {
+        #     key.replace('_', '-'): val.lower() if isinstance(val, str) else val
+        #     for key, val in self.log_parser.get('input_parameters', {}).items()
+        # }
+        self.input_parameters = self.log_parser.get('input_parameters', {})
+        self.standardize_input_parameters(self.input_parameters)
+
+        # read the mdp output or input to supplement the log inputs (i.e., only store if not found in log)
         self.mdp_parser.mainfile = self.get_mdp_file()
+        self.input_parameters[
+            'mdp_unique_params'
+        ] = {}  # parameters that are unique to the mdp file
         for key, param in self.mdp_parser.get('input_parameters', {}).items():
             new_key = key.replace('_', '-')
-            if new_key not in self.input_parameters:
-                self.input_parameters[new_key] = (
+            if not self.check_input_parameters_dict_recursive(
+                self.input_parameters, new_key
+            ):
+                self.input_parameters['mdp_unique_params'][new_key] = (
                     param.lower() if isinstance(param, str) else param
                 )
 

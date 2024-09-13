@@ -19,10 +19,17 @@
 import pytest
 import numpy as np
 import h5py
+import json
+
+from typing import (
+    Any,
+    Dict,
+)
 
 from nomad.datamodel import EntryArchive
 from atomisticparsers.gromacs import GromacsParser
 from simulationworkflowschema.molecular_dynamics import FreeEnergyCalculationParameters
+from atomisticparsers.gromacs import GromacsLogParser
 
 
 def approx(value, abs=0, rel=1e-6):
@@ -41,8 +48,10 @@ def test_md_verbose(parser):
     sec_run = archive.run[0]
     assert sec_run.program.version == '5.1.4'
     sec_control = sec_run.x_gromacs_section_control_parameters
-    assert sec_control.x_gromacs_inout_control_coulombtype == 'pme'
-    assert np.shape(sec_control.x_gromacs_inout_control_deform) == (3, 3)
+    assert sec_control.x_gromacs_all_input_parameters.get('coulombtype') == 'pme'
+    assert np.shape(
+        sec_control.x_gromacs_all_input_parameters.get('qm-opts').get('deform')
+    ) == (3, 3)
 
     sec_workflow = archive.workflow2
     assert sec_workflow.m_def.name == 'MolecularDynamics'
@@ -502,3 +511,69 @@ def test_free_energy_calculations(parser):
     assert sec_results.value_unit == 'kilojoule'
     # assert isinstance(sec_results.method_ref, FreeEnergyCalculationParameters)
     # TODO add testing of hdf5 references in sec_results ('value_total_energy_magnitude', 'value_total_energy_derivative_magnitude', 'value_total_energy_differences_magnitude', 'value_PV_energy_magnitude') to NOMAD testing
+
+
+@pytest.mark.parametrize(
+    'path, input_log_fnm, result_json_fnm',
+    [
+        ('tests/data/gromacs/input_parameters', 'test.log', 'input_parameters.json'),
+        (
+            'tests/data/gromacs/free_energy_calculations/alchemical_transformation_single_run',
+            'fep_run-7.log',
+            'input_parameters.json',
+        ),
+    ],
+)
+def test_str_to_input_parameters(path: str, input_log_fnm: str, result_json_fnm: str):
+    """_summary_
+
+    Args:
+        input (str): _description_
+        result (Dict[Any]): _description_
+    """
+
+    def assert_dict_equal(d1, d2):
+        """
+        Recursively assert that two dictionaries are equal.
+
+        Args:
+            d1 (dict): First dictionary to compare.
+            d2 (dict): Second dictionary to compare.
+        """
+
+        assert isinstance(d1, dict), f'Expected dict, got {type(d1)}'
+        assert isinstance(d2, dict), f'Expected dict, got {type(d2)}'
+        assert d1.keys() == d2.keys(), f'Keys mismatch: {d1.keys()} != {d2.keys()}'
+
+        for key in d1:
+            if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                assert_dict_equal(d1[key], d2[key])
+            else:
+                if isinstance(d1[key], (str, bool)):
+                    assert (
+                        d1[key] == d2[key]
+                    ), f"Value mismatch for key '{key}': {d1[key]} != {d2[key]}"
+                elif isinstance(d1[key], np.ndarray):
+                    assert np.isclose(
+                        d1[key], d2[key]
+                    ).all(), f"Value mismatch for key '{key}': {d1[key]} != {d2[key]}"
+                elif abs(d1[key]) == float('inf'):
+                    assert 'inf' == d2[key] if d1[key] > 0 else '-inf' == d2[key]
+                else:
+                    assert d1[key] == approx(
+                        d2[key]
+                    ), f"Value mismatch for key '{key}': {d1[key]} != {d2[key]}"
+
+    log_parser = GromacsLogParser()
+    log_parser.mainfile = f'{path}/{input_log_fnm}'
+    parsed_parameters = log_parser.get('input_parameters')
+    parsed_parameters = {
+        key.replace('_', '-'): val.lower() if isinstance(val, str) else val
+        for key, val in parsed_parameters.items()
+    }
+
+    with open(f'{path}/{result_json_fnm}', 'r', encoding='utf-8') as f:
+        result = json.load(f)
+    __ = result.pop('mdp_unique_params')
+
+    assert_dict_equal(parsed_parameters, result)
