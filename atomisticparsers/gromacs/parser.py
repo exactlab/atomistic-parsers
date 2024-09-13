@@ -233,7 +233,7 @@ class GromacsLogParser(TextParser):
             ),
             Quantity(
                 'input_parameters',
-                r'Input Parameters:\s*([\s\S]+?)\n\n',
+                r'Input Parameters:\s*\n([\s\S]+?)\n\n',
                 str_operation=str_to_input_parameters,
             ),
             Quantity('maximum_force', r'Norm of force\s*([\s\S]+?)\n\n', flatten=False),
@@ -655,7 +655,7 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
                 tpr_setting.F_VSITE3FD,
                 tpr_setting.F_VSITE3FAD,
             ]:
-                parameters.append(data.unpack_real())  # vsite.a
+                parameters.append(data.unpack_reafilel())  # vsite.a
 
             elif i in [
                 tpr_setting.F_VSITE3OUT,
@@ -1559,10 +1559,18 @@ class GromacsParser(MDParser):
                 )
                 sec_fe = self.archive.workflow2.results.free_energy_calculations[0]
                 sec_fe.method_ref = sec_fe_parameters
-                sec_fe.value_total_energy_magnitude = columns[:, 0]
-                sec_fe.value_total_energy_derivative_magnitude = columns[:, 1]
-                sec_fe.value_total_energy_differences_magnitude = columns[:, 2:-1]
-                sec_fe.value_PV_energy_magnitude = columns[:, -1]
+                sec_fe.value_total_energy_magnitude = (
+                    columns[:, 0] * self._gro_energy_units
+                )
+                sec_fe.value_total_energy_derivative_magnitude = (
+                    columns[:, 1] * self._gro_energy_units
+                )
+                sec_fe.value_total_energy_differences_magnitude = (
+                    columns[:, 2:-1] * self._gro_energy_units
+                )
+                sec_fe.value_PV_energy_magnitude = (
+                    columns[:, -1] * self._gro_energy_units
+                )
 
     def standardize_input_parameters(self, input_dict: dict):
         """_summary_
