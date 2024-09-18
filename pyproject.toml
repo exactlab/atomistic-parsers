@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=61.0.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nomad-parser-plugins-atomistic"
-version = "1.0.1"
+dynamic = ["version"]
 description = "Collection of NOMAD parsers for atomistic codes."
 readme = "README.md"
 authors = [{ name = "The NOMAD Authors" }]
@@ -83,6 +83,8 @@ line-ending = "auto"
 include = [
     "atomisticparsers*",
 ] # package names should match these glob patterns (["*"] by default)
+
+[tool.setuptools_scm]
 
 [project.entry-points.'nomad.plugin']
 amberparser = "atomisticparsers:amber_parser_entry_point"
