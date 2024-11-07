@@ -35,7 +35,10 @@ from scipy.stats import linregress
 
 from nomad.units import ureg
 from nomad.parsing.file_parser import FileParser
-from simulationworkflowschema.molecular_dynamics import BeadGroup, shifted_correlation_average
+from simulationworkflowschema.molecular_dynamics import (
+    BeadGroup,
+    shifted_correlation_average,
+)
 
 
 MOL = 6.022140857e23
@@ -74,7 +77,8 @@ class MDAnalysisParser(FileParser):
                     self.mainfile, *self.auxilliary_files, **self.options
                 )
             except Exception as e:
-                self.logger.error('Error creating MDAnalysis universe.', exc_info=e)
+                # self.logger.error('Error creating MDAnalysis universe.', exc_info=e)
+                self.logger.error(f'Error creating MDAnalysis universe: {e}')
         return self._file_handler
 
     @property

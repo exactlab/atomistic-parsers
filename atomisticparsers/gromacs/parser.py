@@ -376,7 +376,7 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
 
     def get_interactions(self, gromacs_version: str = None):
         interactions = super().get_interactions()
-
+        print(interactions)
         # add force field parameters
         try:
             interactions.extend(self.get_force_field_parameters(gromacs_version))
@@ -397,6 +397,7 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
             )
             return []
         gromacs_version = gromacs_version.split('.')[0] if gromacs_version else None
+        # ! This warning does not get triggered, why?
         if gromacs_version == '2024':
             self.logger.warning(
                 'Reading force field from tpr not yet supported for Gromacs 2024. Interactions will not be stored'
@@ -1098,13 +1099,14 @@ class GromacsParser(MDParser):
         sec_method.force_field = sec_force_field
         sec_model = Model()
         sec_force_field.model.append(sec_model)
+        print('parse_method, trying to get n_atoms')
         try:
             n_atoms = self.traj_parser.get('n_atoms', 0)
         except Exception:
             gro_file = self.get_gromacs_file('gro')
             self.traj_parser.mainfile = gro_file
             n_atoms = self.traj_parser.get('n_atoms', 0)
-
+        print('parse_method, getting atoms_info')
         atoms_info = self.traj_parser.get('atoms_info', {})
         for n in range(n_atoms):
             sec_atom = AtomParameters()
@@ -1641,15 +1643,27 @@ class GromacsParser(MDParser):
         self.energy_parser.logger = self.logger
         self._frame_rate = None
 
-        sec_run = Run()
-        self.archive.run.append(sec_run)
-
         header = self.log_parser.get('header', {})
 
+        topology_file = self.get_gromacs_file('tpr')
+
+        try:
+            # Failing to create an MDAnalysis universe will cause the parser to crash. ('mdanalysis.py', line 80).
+            # Need an initial attempt to read the tpr file to gracefully handle the version incompatibility.
+            with open(topology_file, 'rb') as f:
+                data = tpr_utils.TPXUnpacker(f.read())
+            tpr_header = tpr_utils.read_tpxheader(data)
+        except NotImplementedError as e:
+            err_msg = f'Simulation files generated with Gromacs {str(header.get('version', 'unknown')).lstrip('VERSION ')} can not be processed: {str(e).rstrip()}. No data will be parsed.'
+            logging.error(err_msg)
+            raise NotImplementedError(err_msg) from e.with_traceback(None)
+
+        sec_run = Run()
         sec_run.program = Program(
             name='GROMACS',
             version=str(header.get('version', 'unknown')).lstrip('VERSION '),
         )
+        self.archive.run.append(sec_run)
 
         sec_time_run = TimeRun()
         sec_run.time_run = sec_time_run
@@ -1691,7 +1705,6 @@ class GromacsParser(MDParser):
                     param.lower() if isinstance(param, str) else param
                 )
 
-        topology_file = self.get_gromacs_file('tpr')
         # I have no idea if output trajectory file can be specified in input
         trr_file = self.get_gromacs_file('trr')
         trr_file_nopath = trr_file.rsplit('.', 1)[0]
@@ -1708,6 +1721,7 @@ class GromacsParser(MDParser):
 
         self.traj_parser.mainfile = topology_file
         self.traj_parser.auxilliary_files = [trajectory_file]
+
         # check to see if the trr file can be read properly (and has positions), otherwise try xtc file instead
         positions = None
         if (universe := self.traj_parser.universe) is not None:
