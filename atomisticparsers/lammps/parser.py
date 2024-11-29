@@ -354,7 +354,9 @@ class TrajParser(TextParser):
             ),
             Quantity(
                 'atoms_info',
-                r'\s*ITEM:\s*ATOMS\s*([ \w]+\n)*?([\+\-eE\d\.\n ]+)',
+                # r'\s*ITEM:\s*ATOMS\s*([ \w]+\n)*?([\+\-eE\d\.\n ]+)',
+                # fix regular expression
+                r'\s*ITEM:\s*ATOMS\s*([ \w\[\]]+\n)((?:\d+.*(?:\n|$))+)',
                 str_operation=get_atoms_info,
                 comment='#',
                 repeats=True,
