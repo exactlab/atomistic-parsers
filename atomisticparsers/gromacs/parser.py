@@ -1647,16 +1647,16 @@ class GromacsParser(MDParser):
 
         topology_file = self.get_gromacs_file('tpr')
 
-        try:
-            # Failing to create an MDAnalysis universe will cause the parser to crash. ('mdanalysis.py', line 80).
-            # Need an initial attempt to read the tpr file to gracefully handle the version incompatibility.
-            with open(topology_file, 'rb') as f:
-                data = tpr_utils.TPXUnpacker(f.read())
-            tpr_header = tpr_utils.read_tpxheader(data)
-        except NotImplementedError as e:
-            err_msg = f'Simulation files generated with Gromacs {str(header.get('version', 'unknown')).lstrip('VERSION ')} can not be processed: {str(e).rstrip()}. No data will be parsed.'
-            logging.error(err_msg)
-            raise NotImplementedError(err_msg) from e.with_traceback(None)
+        # try:
+        #     # Failing to create an MDAnalysis universe will cause the parser to crash. ('mdanalysis.py', line 80).
+        #     # Need an initial attempt to read the tpr file to gracefully handle the version incompatibility.
+        #     with open(topology_file, 'rb') as f:
+        #         data = tpr_utils.TPXUnpacker(f.read())
+        #     tpr_header = tpr_utils.read_tpxheader(data)
+        # except NotImplementedError as e:
+        #     err_msg = f'Simulation files generated with Gromacs {str(header.get('version', 'unknown')).lstrip('VERSION ')} can not be processed: {str(e).rstrip()}. No data will be parsed.'
+        #     logging.error(err_msg)
+        #     raise NotImplementedError(err_msg) from e.with_traceback(None)
 
         sec_run = Run()
         sec_run.program = Program(
