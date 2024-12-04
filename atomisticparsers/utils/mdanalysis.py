@@ -77,7 +77,6 @@ class MDAnalysisParser(FileParser):
                     self.mainfile, *self.auxilliary_files, **self.options
                 )
             except Exception as e:
-                # self.logger.error('Error creating MDAnalysis universe.', exc_info=e)
                 self.logger.error(f'Error creating MDAnalysis universe: {e}')
         return self._file_handler
 
