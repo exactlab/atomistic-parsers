@@ -396,7 +396,6 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
             )
             return []
         gromacs_version = gromacs_version.split('.')[0] if gromacs_version else None
-        # ! This warning does not get triggered, why?
         if gromacs_version == '2024':
             self.logger.warning(
                 'Reading force field from tpr not yet supported for Gromacs 2024. Interactions will not be stored'
