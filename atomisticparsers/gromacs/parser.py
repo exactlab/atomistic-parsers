@@ -376,7 +376,6 @@ class GromacsMDAnalysisParser(MDAnalysisParser):
 
     def get_interactions(self, gromacs_version: str = None):
         interactions = super().get_interactions()
-
         # add force field parameters
         try:
             interactions.extend(self.get_force_field_parameters(gromacs_version))
@@ -1104,7 +1103,6 @@ class GromacsParser(MDParser):
             gro_file = self.get_gromacs_file('gro')
             self.traj_parser.mainfile = gro_file
             n_atoms = self.traj_parser.get('n_atoms', 0)
-
         atoms_info = self.traj_parser.get('atoms_info', {})
         for n in range(n_atoms):
             sec_atom = AtomParameters()
@@ -1641,15 +1639,16 @@ class GromacsParser(MDParser):
         self.energy_parser.logger = self.logger
         self._frame_rate = None
 
-        sec_run = Run()
-        self.archive.run.append(sec_run)
-
         header = self.log_parser.get('header', {})
 
+        topology_file = self.get_gromacs_file('tpr')
+
+        sec_run = Run()
         sec_run.program = Program(
             name='GROMACS',
             version=str(header.get('version', 'unknown')).lstrip('VERSION '),
         )
+        self.archive.run.append(sec_run)
 
         sec_time_run = TimeRun()
         sec_run.time_run = sec_time_run
@@ -1691,7 +1690,6 @@ class GromacsParser(MDParser):
                     param.lower() if isinstance(param, str) else param
                 )
 
-        topology_file = self.get_gromacs_file('tpr')
         # I have no idea if output trajectory file can be specified in input
         trr_file = self.get_gromacs_file('trr')
         trr_file_nopath = trr_file.rsplit('.', 1)[0]
@@ -1708,6 +1706,7 @@ class GromacsParser(MDParser):
 
         self.traj_parser.mainfile = topology_file
         self.traj_parser.auxilliary_files = [trajectory_file]
+
         # check to see if the trr file can be read properly (and has positions), otherwise try xtc file instead
         positions = None
         if (universe := self.traj_parser.universe) is not None:
