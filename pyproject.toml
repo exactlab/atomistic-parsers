@@ -15,7 +15,8 @@ dependencies = [
     "nomad-schema-plugin-run>=1.0.1",
     "nomad-parser-plugins-simulation>=1.0.2",
     "lxml>=5.2",
-    "mdanalysis==2.7.0",
+    "mdanalysis>=2.8.0,<3.0.0 ; python_full_version >= '3.10'",
+    "mdanalysis<2.8 ; python_full_version < '3.10'",
     "panedr>=0.2",
     "scipy>=1.7.1",
     "pydantic>=1.10.8,<2.0.0",
@@ -93,6 +94,7 @@ include = [
 [project.entry-points.'nomad.plugin']
 amberparser = "atomisticparsers:amber_parser_entry_point"
 asapparser = "atomisticparsers:asap_parser_entry_point"
+aseparser = "atomisticparsers:ase_parser_entry_point"
 bopfoxparser = "atomisticparsers:bopfox_parser_entry_point"
 dftbplusparser = "atomisticparsers:dftbplus_parser_entry_point"
 dlpolyparser = "atomisticparsers:dlpoly_parser_entry_point"

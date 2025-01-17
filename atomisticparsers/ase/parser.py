@@ -15,8 +15,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
 
-from .mdanalysis import MDAnalysisParser
-from .parsers import MDParser, ASETrajParser
+from atomisticparsers.utils import ASETrajParser
 
-MOL = 6.022140857e23
+
+class AseParser(ASETrajParser):
+    def write_to_archive(self) -> None:
+        super().write_to_archive()
+
+        if self.archive.run:
+            self.archive.run[0].program.name = 'ASE'
+
+    # TODO add tests
